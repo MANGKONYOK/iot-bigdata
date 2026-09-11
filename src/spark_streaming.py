@@ -26,15 +26,17 @@ CHECKPOINT_DIR = os.path.join(ROOT_DIR, "checkpoints", "spark_streaming")
 def get_telemetry_schema() -> Any:
     """Returns the expected schema of the landed IoT JSON events."""
     return StructType([
-        StructField("room_temperature", DoubleType(), True),
-        StructField("room_humidity", DoubleType(), True),
-        StructField("outdoor_temperature", DoubleType(), True),
-        StructField("outdoor_humidity", DoubleType(), True),
-        StructField("location_lattitude", DoubleType(), True),
-        StructField("location_longitude", DoubleType(), True),
-        StructField("AQI", DoubleType(), True),
-        StructField("AirCondition_Status", IntegerType(), True),
-        StructField("timestamp", DoubleType(), True),
+        StructField("event_id", StringType(), True),
+        StructField("device_id", StringType(), True),
+        StructField("room", StringType(), True),
+        StructField("location_type", StringType(), True),
+        StructField("event_time", StringType(), True),
+        StructField("temperature", DoubleType(), True),
+        StructField("humidity", DoubleType(), True),
+        StructField("aqi", IntegerType(), True),
+        StructField("ac_status", IntegerType(), True),
+        StructField("latitude", DoubleType(), True),
+        StructField("longitude", DoubleType(), True),
         StructField("_topic", StringType(), True),
         StructField("_landed_at", DoubleType(), True),
     ])
@@ -63,23 +65,24 @@ def process_stream(landing_dir: str = LANDING_DIR, checkpoint_dir: str = CHECKPO
         .json(landing_dir)
     )
 
-    # Convert epoch timestamp to SQL Timestamp for windowing
+    # Convert event_time string to TimestampType for windowing
     stream_df = raw_stream.withColumn(
-        "event_time", to_timestamp(from_unixtime(col("timestamp")))
+        "parsed_event_time", to_timestamp(col("event_time"), "yyyy-MM-dd HH:mm:ss")
     )
 
-    # Example Windowed Aggregation (Watermarked 10-minute window)
+    # Example Windowed Aggregation (Watermarked window)
     windowed_metrics = (
-        stream_df.withWatermark("event_time", "1 minute")
+        stream_df.withWatermark("parsed_event_time", "1 minute")
         .groupBy(
-            window(col("event_time"), "30 seconds", "15 seconds"),
-            col("_topic"),
+            window(col("parsed_event_time"), "30 seconds", "15 seconds"),
+            col("location_type"),
+            col("room"),
         )
         .agg(
-            avg("room_temperature").alias("avg_room_temp"),
-            avg("room_humidity").alias("avg_room_hum"),
-            avg("AQI").alias("avg_aqi"),
-            max("outdoor_temperature").alias("max_outdoor_temp"),
+            avg("temperature").alias("avg_temperature"),
+            avg("humidity").alias("avg_humidity"),
+            avg("aqi").alias("avg_aqi"),
+            max("temperature").alias("max_temperature"),
         )
     )
 

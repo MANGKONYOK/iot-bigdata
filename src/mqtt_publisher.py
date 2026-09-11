@@ -1,58 +1,112 @@
 """
-MQTT Publisher Module.
-Simulates IoT sensors by reading telemetry data from CSV and publishing to an MQTT broker.
+MQTT Telemetry Publisher Module.
+Simulates IoT sensor nodes by parsing historical records from data/CPE371_datalog.csv
+and streaming standardized JSON telemetry events to an external MQTT broker.
 """
 
+import argparse
 import csv
+from datetime import datetime
 import json
 import os
 import sys
 import time
-import uuid
 from typing import Dict, Any, Generator, Optional
+import uuid
 
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
-# Use the reliable public broker from the lab notebooks
+# Default MQTT broker settings
 DEFAULT_BROKER = "broker.mqttdashboard.com"
 DEFAULT_PORT = 1883
-DEFAULT_TOPIC = "CPE_DEMO_HOUSE/room1"
+DEFAULT_KEEPALIVE = 60
+DEFAULT_QOS = 0
+
+# Topic hierarchy constants
+TOPIC_INDOOR_DEFAULT = "CPE371/house/indoor/sensor"
+TOPIC_OUTDOOR_DEFAULT = "CPE371/house/outdoor/sensor"
+DEFAULT_ROOM = "living"
+
 DEFAULT_DATASET_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "CPE371_datalog.csv"
 )
 
+# House floorplan rooms mapping
+INDOOR_ROOMS = ["living", "kitchen", "dining", "bedroom", "laundry"]
 
-def load_telemetry_records(filepath: str = DEFAULT_DATASET_PATH) -> Generator[Dict[str, Any], None, None]:
-    """Reads telemetry records from the CSV dataset file (with UTF-8 BOM handling)."""
+
+def format_indoor_event(
+    row: Dict[str, Any],
+    room: str = DEFAULT_ROOM,
+    device_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Formats a CSV row into a standardized Indoor JSON telemetry event."""
+    dev_id = device_id or ("sensor-indoor-01" if room == "living" else f"sensor-{room}-01")
+    return {
+        "event_id": str(uuid.uuid4()),
+        "device_id": dev_id,
+        "room": room,
+        "location_type": "Indoor",
+        "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "temperature": round(float(row.get("room_temperature", 0.0)), 2),
+        "humidity": round(float(row.get("room_humidity", 0.0)), 2),
+        "aqi": int(round(float(row.get("AQI", 0)))),
+        "ac_status": int(row.get("AirCondition_Status", 0)),
+        "latitude": round(float(row.get("location_lattitude", 0.0)), 6),
+        "longitude": round(float(row.get("location_longitude", 0.0)), 6),
+    }
+
+
+def format_outdoor_event(
+    row: Dict[str, Any],
+    room: str = "terrace",
+    device_id: str = "sensor-outdoor-01",
+) -> Dict[str, Any]:
+    """Formats a CSV row into a standardized Outdoor JSON telemetry event."""
+    return {
+        "event_id": str(uuid.uuid4()),
+        "device_id": device_id,
+        "room": room,
+        "location_type": "Outdoor",
+        "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "temperature": round(float(row.get("outdoor_temperature", 0.0)), 2),
+        "humidity": round(float(row.get("outdoor_humidity", 0.0)), 2),
+        "aqi": int(round(float(row.get("AQI", 0)))),
+        "ac_status": 0,
+        "latitude": round(float(row.get("location_lattitude", 0.0)), 6),
+        "longitude": round(float(row.get("location_longitude", 0.0)), 6),
+    }
+
+
+def load_raw_dataset(filepath: str = DEFAULT_DATASET_PATH) -> Generator[Dict[str, Any], None, None]:
+    """Reads raw telemetry records from CSV, handling UTF-8 BOM encoding."""
     if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Dataset not found at {filepath}")
+        raise FileNotFoundError(f"Dataset file not found at: {filepath}")
 
-    with open(filepath, mode="r", encoding="utf-8-sig") as csvfile:
-        reader = csv.DictReader(csvfile)
+    with open(filepath, mode="r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
         for row in reader:
-            yield {
-                "room_temperature": float(row.get("room_temperature", 0.0)),
-                "room_humidity": float(row.get("room_humidity", 0.0)),
-                "outdoor_temperature": float(row.get("outdoor_temperature", 0.0)),
-                "outdoor_humidity": float(row.get("outdoor_humidity", 0.0)),
-                "location_lattitude": float(row.get("location_lattitude", 0.0)),
-                "location_longitude": float(row.get("location_longitude", 0.0)),
-                "AQI": float(row.get("AQI", 0.0)),
-                "AirCondition_Status": int(row.get("AirCondition_Status", 0)),
-                "timestamp": time.time(),
-            }
+            yield row
 
 
 class MQTTPublisher:
-    """Manages MQTT connection and streaming publication."""
+    """Manages connection lifecycle and streams sensor events to MQTT Broker."""
 
-    def __init__(self, broker: str = DEFAULT_BROKER, port: int = DEFAULT_PORT):
+    def __init__(
+        self,
+        broker: str = DEFAULT_BROKER,
+        port: int = DEFAULT_PORT,
+        keepalive: int = DEFAULT_KEEPALIVE,
+        qos: int = DEFAULT_QOS,
+    ):
         self.broker = broker
         self.port = port
+        self.keepalive = keepalive
+        self.qos = qos
         self.connected = False
-        client_id = f"cpe371_pub_{uuid.uuid4().hex[:8]}"
 
+        client_id = f"cpe371_pub_{uuid.uuid4().hex[:8]}"
         try:
             self.client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id=client_id)
         except AttributeError:
@@ -64,88 +118,146 @@ class MQTTPublisher:
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         if reason_code == 0:
             self.connected = True
-            print(f"[*] Connected to MQTT broker ({self.broker}:{self.port}) successfully.")
+            print(f"[*] Connected successfully to MQTT broker ({self.broker}:{self.port}).")
         else:
-            print(f"[!] Failed to connect to broker. Return code: {reason_code}")
+            print(f"[!] Failed to connect to broker. Reason code: {reason_code}")
 
     def _on_disconnect(self, client, userdata, flags, reason_code=None, properties=None):
         self.connected = False
         print("[*] Disconnected from MQTT broker.")
 
     def connect(self, timeout: float = 10.0) -> bool:
-        """Connects to the MQTT broker and waits for acknowledgment."""
-        print(f"[*] Connecting to broker {self.broker}:{self.port}...")
-        self.client.connect(self.broker, self.port, keepalive=60)
+        """Establishes connection to the broker and blocks until handshake completes."""
+        print(f"[*] Connecting to MQTT broker at {self.broker}:{self.port} (keepalive={self.keepalive}s)...")
+        self.client.connect(self.broker, self.port, keepalive=self.keepalive)
         self.client.loop_start()
 
-        start = time.time()
-        while not self.connected and (time.time() - start) < timeout:
+        start_time = time.time()
+        while not self.connected and (time.time() - start_time) < timeout:
             time.sleep(0.1)
 
         if not self.connected:
-            print(f"[!] Connection timeout after {timeout} seconds.")
+            print(f"[!] Connection timed out after {timeout} seconds.")
             return False
         return True
 
-    def publish_stream(
+    def publish_event(self, topic: str, payload: Dict[str, Any]) -> bool:
+        """Publishes a single JSON telemetry event to the designated topic."""
+        message_str = json.dumps(payload, ensure_ascii=False)
+        msg_info = self.client.publish(topic, message_str, qos=self.qos)
+        msg_info.wait_for_publish(timeout=2.0)
+        return msg_info.is_published()
+
+    def stream_dataset(
         self,
-        topic: str = DEFAULT_TOPIC,
         filepath: str = DEFAULT_DATASET_PATH,
+        mode: str = "both",
+        room: str = DEFAULT_ROOM,
         interval_seconds: float = 1.0,
         max_records: Optional[int] = None,
     ) -> int:
-        """Streams records from dataset file to MQTT topic."""
+        """Streams dataset rows as telemetry events at configurable intervals."""
         if not self.connected and not self.connect():
-            raise ConnectionError(f"Could not connect to MQTT broker at {self.broker}:{self.port}")
+            raise ConnectionError(f"Cannot connect to broker {self.broker}:{self.port}")
 
         count = 0
+        print(f"[*] Streaming dataset from: {filepath}")
+        print(f"[*] Mode: {mode.upper()} | Interval: {interval_seconds}s | QoS: {self.qos}")
+
         try:
-            print(f"[*] Starting telemetry stream to topic '{topic}' (interval: {interval_seconds}s)...")
-            for record in load_telemetry_records(filepath):
-                # Update timestamp to real-time epoch
-                record["timestamp"] = time.time()
-                payload = json.dumps(record)
-
-                msg_info = self.client.publish(topic, payload, qos=0)
-                msg_info.wait_for_publish(timeout=2.0)
-
+            for row in load_raw_dataset(filepath):
                 count += 1
-                print(f"[{count}] Published: Temp={record['room_temperature']}C, AQI={record['AQI']}")
+
+                # 1. Publish Indoor Telemetry
+                if mode in ("indoor", "both"):
+                    indoor_payload = format_indoor_event(row, room=room)
+                    indoor_topic = f"CPE371/house/{room}/sensor" if room != "indoor" else TOPIC_INDOOR_DEFAULT
+                    self.publish_event(indoor_topic, indoor_payload)
+                    print(
+                        f"[{count}] Indoor -> {indoor_topic} | "
+                        f"Temp={indoor_payload['temperature']}C, Hum={indoor_payload['humidity']}%, "
+                        f"AQI={indoor_payload['aqi']}, AC={indoor_payload['ac_status']}"
+                    )
+
+                # 2. Publish Outdoor Telemetry
+                if mode in ("outdoor", "both"):
+                    outdoor_payload = format_outdoor_event(row, room="terrace")
+                    self.publish_event(TOPIC_OUTDOOR_DEFAULT, outdoor_payload)
+                    print(
+                        f"[{count}] Outdoor -> {TOPIC_OUTDOOR_DEFAULT} | "
+                        f"Temp={outdoor_payload['temperature']}C, Hum={outdoor_payload['humidity']}%"
+                    )
 
                 if max_records and count >= max_records:
-                    print(f"[*] Reached max records limit ({max_records}).")
+                    print(f"[*] Reached specified maximum record limit ({max_records}).")
                     break
 
                 time.sleep(interval_seconds)
+
         except KeyboardInterrupt:
-            print("\n[!] Publication stopped by user.")
+            print("\n[!] Streaming interrupted by user (KeyboardInterrupt).")
         finally:
             self.close()
 
+        print(f"[*] Total dataset rows streamed: {count}")
         return count
 
     def close(self):
-        """Cleanly stops network loop and disconnects."""
-        self.client.loop_stop()
-        self.client.disconnect()
+        """Gracefully terminates network loop and disconnects client."""
+        try:
+            self.client.loop_stop()
+            self.client.disconnect()
+        except Exception:
+            pass
 
 
-def publish_telemetry_stream(
-    broker: str = DEFAULT_BROKER,
-    port: int = DEFAULT_PORT,
-    topic: str = DEFAULT_TOPIC,
-    interval_seconds: float = 1.0,
-    max_records: Optional[int] = None,
-) -> None:
-    """Convenience function to publish telemetry."""
-    publisher = MQTTPublisher(broker=broker, port=port)
-    publisher.publish_stream(
-        topic=topic,
-        interval_seconds=interval_seconds,
-        max_records=max_records,
+def main():
+    parser = argparse.ArgumentParser(
+        description="CPE371 IoT Telemetry Publisher - Simulates sensor telemetry over MQTT from CSV dataset"
+    )
+    parser.add_argument("--broker", default=DEFAULT_BROKER, help=f"MQTT broker hostname (default: {DEFAULT_BROKER})")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"MQTT broker port (default: {DEFAULT_PORT})")
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=1.0,
+        help="Streaming interval between records in seconds (default: 1.0)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["indoor", "outdoor", "both"],
+        default="both",
+        help="Telemetry mode to stream: indoor, outdoor, or both (default: both)",
+    )
+    parser.add_argument(
+        "--room",
+        default="living",
+        choices=INDOOR_ROOMS + ["indoor"],
+        help="Indoor room name for mapping (default: living)",
+    )
+    parser.add_argument(
+        "--max-records",
+        type=int,
+        default=None,
+        help="Maximum rows to stream (default: None - stream entire file)",
+    )
+    parser.add_argument(
+        "--dataset",
+        default=DEFAULT_DATASET_PATH,
+        help=f"Path to datalog CSV file (default: {DEFAULT_DATASET_PATH})",
+    )
+
+    args = parser.parse_args()
+
+    publisher = MQTTPublisher(broker=args.broker, port=args.port)
+    publisher.stream_dataset(
+        filepath=args.dataset,
+        mode=args.mode,
+        room=args.room,
+        interval_seconds=args.interval,
+        max_records=args.max_records,
     )
 
 
 if __name__ == "__main__":
-    # By default, publish 5 records for testing, or set max_records=None to stream continuously
-    publish_telemetry_stream(max_records=5)
+    main()
