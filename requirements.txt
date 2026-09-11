@@ -1,0 +1,8 @@
+# MQTT Protocol Client
+paho-mqtt>=2.0.0
+# Big Data Stream Processing Engine
+pyspark>=3.4.0
+# Data Analysis & Handling
+pandas>=2.0.0
+# HTTP Cloud API Requests
+requests>=2.31.0
