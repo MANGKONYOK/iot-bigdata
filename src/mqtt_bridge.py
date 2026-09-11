@@ -13,10 +13,10 @@ from typing import Any
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
-# Use the reliable public broker from the lab notebooks
+# Topic hierarchy aligning with Feature 2 architecture
 DEFAULT_BROKER = "broker.mqttdashboard.com"
 DEFAULT_PORT = 1883
-DEFAULT_TOPIC = "CPE_DEMO_HOUSE/#"
+DEFAULT_TOPIC = "CPE371/house/#"
 DEFAULT_LANDING_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "iot_landing"
 )
