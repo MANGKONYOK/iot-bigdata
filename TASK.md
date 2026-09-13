@@ -14,20 +14,20 @@
 * **Target File:** `src/spark_streaming.py`
 
 #### Issue #4: PySpark Structured Streaming (10s Windowed Aggregations)
-- [ ] Read continuous JSON micro-batches from `iot_landing/` using `spark.readStream`.
-- [ ] Define explicit `StructType` matching publisher payload schema:
+- [x] Read continuous JSON micro-batches from `iot_landing/` using `spark.readStream`.
+- [x] Define explicit `StructType` matching publisher payload schema:
   - `event_id` (StringType), `device_id` (StringType), `room` (StringType), `location_type` (StringType)
   - `event_time` (StringType -> parse to TimestampType)
   - `temperature` (DoubleType), `humidity` (DoubleType), `aqi` (IntegerType), `ac_status` (IntegerType)
   - `latitude` (DoubleType), `longitude` (DoubleType)
   - `_topic` (StringType), `_received_at` (StringType), `_landed_at` (DoubleType)
-- [ ] Perform spatial categorization:
+- [x] Perform spatial categorization:
   - **Indoor:** `living`, `kitchen`, `laundry`, `wine_cellar`, `gym`, `guest_bedroom`, `dining`, `bath`, `guest_bath`, `hall`
   - **Outdoor:** `terrace`, `patio`, `garage`
-- [ ] Compute tumbling/sliding **10-second windowed averages** for:
+- [x] Compute tumbling/sliding **10-second windowed averages** for:
   - Indoor Temperature & Humidity
   - Outdoor Temperature & Humidity
-- [ ] Output streaming updates to console sink using `outputMode("update")` or `outputMode("complete")` with `trigger(processingTime="5 seconds")`.
+- [x] Output streaming updates to console sink using `outputMode("update")` or `outputMode("complete")` with `trigger(processingTime="5 seconds")`.
 
 #### Issue #5: Watermarking & Anomaly/Alert Threshold Logic
 - [ ] Apply `.withWatermark("timestamp", "30 seconds")` (or 2 minutes) on event time to evict expired state from memory.
