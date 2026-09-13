@@ -1,7 +1,7 @@
 """
 Spark Structured Streaming Module.
 Processes streaming IoT telemetry landed in iot_landing/ with PySpark Structured Streaming.
-Computes windowed aggregations for Indoor and Outdoor spatial zones.
+Computes windowed aggregations with event-time watermarking and threshold-based anomaly alerts.
 """
 
 import argparse
@@ -52,10 +52,12 @@ OUTDOOR_ROOMS: List[str] = [
     "garage",
 ]
 
-# Default Paths
+# Default Paths & Thresholds
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_LANDING_DIR = os.path.join(ROOT_DIR, "iot_landing")
 DEFAULT_CHECKPOINT_DIR = os.path.join(ROOT_DIR, "checkpoints", "spark_iot_metrics")
+DEFAULT_TEMP_ALERT_THRESHOLD = 35.0
+DEFAULT_HUM_ALERT_THRESHOLD = 70.0
 
 
 def get_telemetry_schema() -> StructType:
@@ -114,10 +116,13 @@ def compute_windowed_aggregations(
     stream_df: DataFrame,
     window_duration: str = "10 seconds",
     slide_duration: str = "10 seconds",
+    watermark_delay: str = "30 seconds",
+    temp_alert_threshold: float = DEFAULT_TEMP_ALERT_THRESHOLD,
+    hum_alert_threshold: float = DEFAULT_HUM_ALERT_THRESHOLD,
 ) -> DataFrame:
     """
-    Computes 10-second tumbling/sliding windowed averages and metrics
-    grouped by spatial zone (Indoor / Outdoor) and room.
+    Computes 10-second tumbling/sliding windowed averages and metrics with watermarking
+    and anomaly detection status classification.
     """
     # 1. Parse event_time string to TimestampType
     parsed_df = stream_df.withColumn(
@@ -131,9 +136,12 @@ def compute_windowed_aggregations(
     # 2. Add spatial categorization
     categorized_df = apply_spatial_categorization(parsed_df)
 
-    # 3. Compute 10-second windowed aggregations
+    # 3. Apply Watermarking on event timestamp (Issue #5: Evicts late/expired state)
+    watermarked_df = categorized_df.withWatermark("timestamp", watermark_delay)
+
+    # 4. Compute 10-second windowed aggregations
     windowed_df = (
-        categorized_df.groupBy(
+        watermarked_df.groupBy(
             window(col("timestamp"), window_duration, slide_duration),
             col("spatial_zone"),
             col("room"),
@@ -148,7 +156,18 @@ def compute_windowed_aggregations(
         )
     )
 
-    return windowed_df
+    # 5. Add conditional status column for Anomaly/Alert classification (Issue #5)
+    # ALERT when avg_temperature > 35.0 OR avg_humidity > 70.0, else OK
+    metrics_with_status = windowed_df.withColumn(
+        "status",
+        when(
+            (col("avg_temperature") > temp_alert_threshold)
+            | (col("avg_humidity") > hum_alert_threshold),
+            lit("ALERT"),
+        ).otherwise(lit("OK")),
+    )
+
+    return metrics_with_status
 
 
 def process_stream(
@@ -156,8 +175,11 @@ def process_stream(
     checkpoint_dir: str = DEFAULT_CHECKPOINT_DIR,
     window_duration: str = "10 seconds",
     slide_duration: str = "10 seconds",
+    watermark_delay: str = "30 seconds",
     trigger_interval: str = "5 seconds",
     output_mode: str = "update",
+    temp_alert_threshold: float = DEFAULT_TEMP_ALERT_THRESHOLD,
+    hum_alert_threshold: float = DEFAULT_HUM_ALERT_THRESHOLD,
 ):
     """
     Initializes and runs the structured streaming pipeline from landing directory to console sink.
@@ -168,16 +190,18 @@ def process_stream(
     spark = create_spark_session()
     schema = get_telemetry_schema()
 
-    print("=" * 70)
-    print(" CPE371 Big Data IoT - PySpark Structured Streaming Pipeline")
-    print("=" * 70)
-    print(f"[*] Landing Directory   : {landing_dir}")
-    print(f"[*] Checkpoint Directory: {checkpoint_dir}")
-    print(f"[*] Window Duration     : {window_duration}")
-    print(f"[*] Slide Duration      : {slide_duration}")
-    print(f"[*] Trigger Interval    : {trigger_interval}")
-    print(f"[*] Output Mode         : {output_mode}")
-    print("=" * 70)
+    print("=" * 75)
+    print(" CPE371 Big Data IoT - PySpark Structured Streaming & Alert Engine")
+    print("=" * 75)
+    print(f"[*] Landing Directory      : {landing_dir}")
+    print(f"[*] Checkpoint Directory   : {checkpoint_dir}")
+    print(f"[*] Window Duration        : {window_duration}")
+    print(f"[*] Slide Duration         : {slide_duration}")
+    print(f"[*] Watermark Delay        : {watermark_delay}")
+    print(f"[*] Trigger Interval       : {trigger_interval}")
+    print(f"[*] Output Mode            : {output_mode}")
+    print(f"[*] Alert Thresholds       : Temp > {temp_alert_threshold}°C | Hum > {hum_alert_threshold}%")
+    print("=" * 75)
 
     # Ingest continuous JSON micro-batches using spark.readStream
     raw_stream = (
@@ -186,11 +210,14 @@ def process_stream(
         .json(landing_dir)
     )
 
-    # Apply spatial categorization and 10s windowed aggregations
+    # Apply spatial categorization, 10s windowed aggregations, watermarking & alert logic
     aggregated_metrics = compute_windowed_aggregations(
         raw_stream,
         window_duration=window_duration,
         slide_duration=slide_duration,
+        watermark_delay=watermark_delay,
+        temp_alert_threshold=temp_alert_threshold,
+        hum_alert_threshold=hum_alert_threshold,
     )
 
     # Write streaming updates to Console Sink
@@ -215,7 +242,7 @@ def process_stream(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PySpark Structured Streaming Analytics for IoT Telemetry"
+        description="PySpark Structured Streaming Analytics & Alert Engine for IoT Telemetry"
     )
     parser.add_argument(
         "--landing-dir",
@@ -238,6 +265,11 @@ def main():
         help="Aggregation slide duration (default: '10 seconds')",
     )
     parser.add_argument(
+        "--watermark",
+        default="30 seconds",
+        help="Watermark delay for state eviction (default: '30 seconds')",
+    )
+    parser.add_argument(
         "--trigger",
         default="5 seconds",
         help="Micro-batch trigger interval (default: '5 seconds')",
@@ -248,6 +280,18 @@ def main():
         default="update",
         help="Streaming output mode (default: update)",
     )
+    parser.add_argument(
+        "--temp-alert",
+        type=float,
+        default=DEFAULT_TEMP_ALERT_THRESHOLD,
+        help=f"Temperature threshold for ALERT status (default: {DEFAULT_TEMP_ALERT_THRESHOLD})",
+    )
+    parser.add_argument(
+        "--hum-alert",
+        type=float,
+        default=DEFAULT_HUM_ALERT_THRESHOLD,
+        help=f"Humidity threshold for ALERT status (default: {DEFAULT_HUM_ALERT_THRESHOLD})",
+    )
 
     args = parser.parse_args()
 
@@ -256,8 +300,11 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         window_duration=args.window,
         slide_duration=args.slide,
+        watermark_delay=args.watermark,
         trigger_interval=args.trigger,
         output_mode=args.output_mode,
+        temp_alert_threshold=args.temp_alert,
+        hum_alert_threshold=args.hum_alert,
     )
 
 
