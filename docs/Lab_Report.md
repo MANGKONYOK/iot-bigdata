@@ -47,10 +47,13 @@ The project is organized modularly:
 - Topic hierarchy: `CPE_DEMO_HOUSE/<room_id>`.
 - Reliable file landing via `src/mqtt_bridge.py`.
 
-### 3.2 Spark Stream Processing (`feat/spark`)
-- PySpark Structured Streaming with watermarked sliding windows.
-- Aggregation of temperature, humidity, and AQI indices.
-- Fault-tolerant checkpointing.
+### 3.2 Spark Stream Processing (`feat/spark-streaming`, `feat/spark-watermarking-alerts`)
+- **Micro-Batch Ingestion**: Continuous reading from `iot_landing/` using `spark.readStream` with explicit `StructType` schema.
+- **Spatial Categorization**: Automatic zoning into `Indoor` (living, kitchen, laundry, etc.) and `Outdoor` (terrace, patio, garage).
+- **Watermarked Windowed Aggregations**: Applied 10-second tumbling/sliding windows with `.withWatermark("timestamp", "30 seconds")` to evict late/expired state.
+- **Metrics Computation**: Average temperature, average humidity, average AQI, min/max bounds, and micro-batch record counts.
+- **Anomaly Detection & Alerts**: Evaluated rule thresholds to flag `status = 'ALERT'` when `avg_temperature > 35.0°C` or `avg_humidity > 70.0%`, else `OK`.
+- **Fault-Tolerant Checkpointing**: Configured checkpointing in `./checkpoints/spark_iot_metrics` with console sink updating every 5 seconds.
 
 ### 3.3 Cloud Forwarding & Actuator Control (`feat/cloud`)
 - Dweet.cc and ThingSpeak REST API integrations via `src/cloud_forwarder.py`.

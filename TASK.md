@@ -30,11 +30,11 @@
 - [x] Output streaming updates to console sink using `outputMode("update")` or `outputMode("complete")` with `trigger(processingTime="5 seconds")`.
 
 #### Issue #5: Watermarking & Anomaly/Alert Threshold Logic
-- [ ] Apply `.withWatermark("timestamp", "30 seconds")` (or 2 minutes) on event time to evict expired state from memory.
-- [ ] Add calculated conditional column `status`:
+- [x] Apply `.withWatermark("timestamp", "30 seconds")` (or 2 minutes) on event time to evict expired state from memory.
+- [x] Add calculated conditional column `status`:
   - `ALERT` when `avg_temperature > 35.0` (or `avg_humidity > 70.0`)
   - `OK` otherwise
-- [ ] Ensure checkpoint directory is configured (e.g. `./checkpoints/spark_iot_metrics`).
+- [x] Ensure checkpoint directory is configured (e.g. `./checkpoints/spark_iot_metrics`).
 
 ---
 
