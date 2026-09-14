@@ -41,6 +41,8 @@ venv.bak/
 # IoT Landing runtime files (keep directory, ignore generated events)
 iot_landing/*.json
 iot_landing/*.tmp
+**/iot_landing/*.json
+**/iot_landing/*.tmp
 !iot_landing/.gitkeep
 
 # Spark checkpoints & logs

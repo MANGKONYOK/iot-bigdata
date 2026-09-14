@@ -1,8 +1,18 @@
 # MQTT Protocol Client
-paho-mqtt>=2.0.0
+paho-mqtt==2.1.0
 # Big Data Stream Processing Engine
-pyspark>=3.4.0
+pyspark==3.5.3
 # Data Analysis & Handling
 pandas>=2.0.0
 # HTTP Cloud API Requests
 requests>=2.31.0
+
+pip3 install paho-mqtt, pyspark
+
+sudo apt-get install mosquitto, openjdk-17-jdk -y
+
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+python mqtt_to_landing.py
+spark-submit spark_processor.py
+python publisher.py --file CPE371_datalog.csv --interval 1
