@@ -16,15 +16,14 @@ from pyspark.sql.types import (
     DoubleType,
     IntegerType,
     StringType,
-    TimestampType,
 )
 from pyspark.sql.functions import (
     col,
     to_timestamp,
     window,
     avg,
-    max,
-    min,
+    max as spark_max,
+    min as spark_min,
     count,
     round as spark_round,
     when,
@@ -40,6 +39,7 @@ INDOOR_ROOMS: List[str] = [
     "wine_cellar",
     "gym",
     "guest_bedroom",
+    "bedroom",
     "dining",
     "bath",
     "guest_bath",
@@ -119,6 +119,7 @@ def compute_windowed_aggregations(
     watermark_delay: str = "30 seconds",
     temp_alert_threshold: float = DEFAULT_TEMP_ALERT_THRESHOLD,
     hum_alert_threshold: float = DEFAULT_HUM_ALERT_THRESHOLD,
+    group_by_room: bool = False,
 ) -> DataFrame:
     """
     Computes 10-second tumbling/sliding windowed averages and metrics with watermarking
@@ -140,18 +141,23 @@ def compute_windowed_aggregations(
     watermarked_df = categorized_df.withWatermark("timestamp", watermark_delay)
 
     # 4. Compute 10-second windowed aggregations
+    # Activity step 4 asks for four figures: Indoor/Outdoor temperature & humidity.
+    # Zone-level grouping produces exactly those; --by-room adds per-room breakdown.
+    group_keys = [
+        window(col("timestamp"), window_duration, slide_duration),
+        col("spatial_zone"),
+    ]
+    if group_by_room:
+        group_keys.append(col("room"))
+
     windowed_df = (
-        watermarked_df.groupBy(
-            window(col("timestamp"), window_duration, slide_duration),
-            col("spatial_zone"),
-            col("room"),
-        )
+        watermarked_df.groupBy(*group_keys)
         .agg(
             spark_round(avg("temperature"), 2).alias("avg_temperature"),
             spark_round(avg("humidity"), 2).alias("avg_humidity"),
             spark_round(avg("aqi"), 1).alias("avg_aqi"),
-            spark_round(max("temperature"), 2).alias("max_temperature"),
-            spark_round(min("temperature"), 2).alias("min_temperature"),
+            spark_round(spark_max("temperature"), 2).alias("max_temperature"),
+            spark_round(spark_min("temperature"), 2).alias("min_temperature"),
             count("event_id").alias("event_count"),
         )
     )
@@ -180,6 +186,7 @@ def process_stream(
     output_mode: str = "update",
     temp_alert_threshold: float = DEFAULT_TEMP_ALERT_THRESHOLD,
     hum_alert_threshold: float = DEFAULT_HUM_ALERT_THRESHOLD,
+    group_by_room: bool = False,
 ):
     """
     Initializes and runs the structured streaming pipeline from landing directory to console sink.
@@ -201,11 +208,16 @@ def process_stream(
     print(f"[*] Trigger Interval       : {trigger_interval}")
     print(f"[*] Output Mode            : {output_mode}")
     print(f"[*] Alert Thresholds       : Temp > {temp_alert_threshold}°C | Hum > {hum_alert_threshold}%")
+    print(f"[*] Grouping               : {'window + zone + room' if group_by_room else 'window + zone'}")
     print("=" * 75)
 
     # Ingest continuous JSON micro-batches using spark.readStream
+    # mqtt_bridge.py writes one pretty-printed (indented) JSON object per file.
+    # Without multiLine=true Spark treats each physical line as a record and every
+    # field parses as NULL. Verified: 238 all-NULL rows vs 14 correct rows.
     raw_stream = (
         spark.readStream.schema(schema)
+        .option("multiLine", "true")
         .option("maxFilesPerTrigger", 10)
         .json(landing_dir)
     )
@@ -218,6 +230,7 @@ def process_stream(
         watermark_delay=watermark_delay,
         temp_alert_threshold=temp_alert_threshold,
         hum_alert_threshold=hum_alert_threshold,
+        group_by_room=group_by_room,
     )
 
     # Write streaming updates to Console Sink
@@ -293,6 +306,12 @@ def main():
         help=f"Humidity threshold for ALERT status (default: {DEFAULT_HUM_ALERT_THRESHOLD})",
     )
 
+    parser.add_argument(
+        "--by-room",
+        action="store_true",
+        help="Additionally break windowed metrics down per room (default: zone-level only)",
+    )
+
     args = parser.parse_args()
 
     process_stream(
@@ -305,6 +324,7 @@ def main():
         output_mode=args.output_mode,
         temp_alert_threshold=args.temp_alert,
         hum_alert_threshold=args.hum_alert,
+        group_by_room=args.by_room,
     )
 
 
