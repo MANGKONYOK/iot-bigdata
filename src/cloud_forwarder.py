@@ -113,6 +113,56 @@ def send_to_thingspeak(api_key: str, fields: Dict[str, Any], timeout: float = 10
     return False
 
 
+# Two payload shapes reach dweet.cc: raw datalog rows posted by the Assignment 1
+# notebook, and aggregated metrics posted by forward_once(). Accept either.
+DWEET_FIELD_ALIASES = {
+    "field1": ("room_temperature", "indoor_temperature"),
+    "field2": ("room_humidity", "indoor_humidity"),
+    "field3": ("outdoor_temperature",),
+    "field4": ("outdoor_humidity",),
+    "field5": ("AQI", "aqi"),
+    "field6": ("AirCondition_Status", "ac_status"),
+    "field7": ("location_lattitude", "latitude"),
+    "field8": ("location_longitude", "longitude"),
+}
+
+
+def dweet_content_to_fields(content: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Maps a dweet.cc content payload onto ThingSpeak fields.
+
+    dweet returns every value as a string, so values pass through as-is and
+    ThingSpeak parses them.
+    """
+    fields = {}
+    for field, aliases in DWEET_FIELD_ALIASES.items():
+        for alias in aliases:
+            if content.get(alias) is not None:
+                fields[field] = content[alias]
+                break
+    return fields
+
+
+def forward_dweet_to_thingspeak(thing_name: str, api_key: str) -> bool:
+    """
+    Assignment 1 step 3: read what is stored at dweet.cc and chart it in ThingSpeak.
+
+    The dashboard is therefore fed from the dweet store, not from a second pass over
+    the CSV.
+    """
+    content = verify_dweet(thing_name)
+    if not content:
+        return False
+
+    fields = dweet_content_to_fields(content)
+    if not fields:
+        print(f"[!] Latest dweet has no recognised datalog fields: {sorted(content)}")
+        return False
+
+    print(f"[*] Forwarding {len(fields)} fields from dweet.cc -> ThingSpeak")
+    return send_to_thingspeak(api_key, fields)
+
+
 def read_latest_metrics(landing_dir: str = DEFAULT_LANDING_DIR, sample: int = 40) -> Dict[str, Any]:
     """
     Derives the four headline metrics from the most recent landed events.
@@ -240,6 +290,8 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=THINGSPEAK_MIN_INTERVAL,
                         help=f"Seconds between forwards (min {THINGSPEAK_MIN_INTERVAL} for ThingSpeak)")
     parser.add_argument("--count", type=int, default=1, help="Number of forwards (0 = run forever)")
+    parser.add_argument("--from-dweet", action="store_true",
+                        help="Feed ThingSpeak from the latest dweet.cc record (Assignment 1 step 3)")
     parser.add_argument("--actuate", action="store_true",
                         help="Also evaluate the Issue #7 actuator rules on recent events")
     parser.add_argument("--publish-commands", action="store_true",
@@ -268,8 +320,11 @@ def main() -> None:
     try:
         while args.count == 0 or sent < args.count:
             print(f"\n--- forward #{sent + 1} ---")
-            forward_once(args.thing_name, args.landing_dir, api_key,
-                         actuate=args.actuate, mqtt_client=mqtt_client)
+            if args.from_dweet:
+                forward_dweet_to_thingspeak(args.thing_name, api_key)
+            else:
+                forward_once(args.thing_name, args.landing_dir, api_key,
+                             actuate=args.actuate, mqtt_client=mqtt_client)
             sent += 1
             if args.count == 0 or sent < args.count:
                 time.sleep(interval)
