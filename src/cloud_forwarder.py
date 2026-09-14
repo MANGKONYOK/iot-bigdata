@@ -16,6 +16,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from actuator_logic import process_telemetry_actuation, publish_decisions
+
 try:
     import requests
 except ImportError:
@@ -177,7 +179,38 @@ def build_thingspeak_fields(metrics: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in mapping.items() if value is not None}
 
 
-def forward_once(thing_name: str, landing_dir: str, api_key: str) -> Dict[str, Any]:
+def run_actuators(landing_dir: str, sample: int = 10, mqtt_client: Any = None) -> List[Dict[str, Any]]:
+    """
+    Applies the Issue #7 actuator rules to the most recent landed events and,
+    when an MQTT client is supplied, publishes each command to its LED/set topic.
+
+    This is the seam Issue #8 calls "Cloud Forwarder & Actuators": it joins the
+    cloud module to the rule module over the same landing zone.
+    """
+    paths = sorted(glob.glob(os.path.join(landing_dir, "*.json")), key=os.path.getmtime)[-sample:]
+    decisions: List[Dict[str, Any]] = []
+
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                event = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        decisions.extend(process_telemetry_actuation(event))
+
+    if decisions:
+        unique = {(d["device"], d["action"]) for d in decisions}
+        print(f"[*] Actuators: {len(decisions)} decisions, {len(unique)} distinct commands")
+        for device, action in sorted(unique):
+            print(f"      {device:20s} -> {action}")
+        if mqtt_client is not None:
+            print(f"[+] Published {publish_decisions(decisions, mqtt_client)} commands to /CPE_HOUSE/*/LED/set")
+
+    return decisions
+
+
+def forward_once(thing_name: str, landing_dir: str, api_key: str,
+                 actuate: bool = False, mqtt_client: Any = None) -> Dict[str, Any]:
     """Reads current metrics and pushes them to both cloud platforms."""
     metrics = read_latest_metrics(landing_dir)
     if metrics["sample_size"] == 0:
@@ -193,6 +226,10 @@ def forward_once(thing_name: str, landing_dir: str, api_key: str) -> Dict[str, A
     send_to_dweet(thing_name, payload)
     verify_dweet(thing_name)
     send_to_thingspeak(api_key, build_thingspeak_fields(metrics))
+
+    if actuate:
+        run_actuators(landing_dir, mqtt_client=mqtt_client)
+
     return metrics
 
 
@@ -203,6 +240,11 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=THINGSPEAK_MIN_INTERVAL,
                         help=f"Seconds between forwards (min {THINGSPEAK_MIN_INTERVAL} for ThingSpeak)")
     parser.add_argument("--count", type=int, default=1, help="Number of forwards (0 = run forever)")
+    parser.add_argument("--actuate", action="store_true",
+                        help="Also evaluate the Issue #7 actuator rules on recent events")
+    parser.add_argument("--publish-commands", action="store_true",
+                        help="With --actuate, publish commands to /CPE_HOUSE/<ROOM>/LED/set over MQTT")
+    parser.add_argument("--broker", default="broker.mqttdashboard.com", help="MQTT broker for commands")
     args = parser.parse_args()
 
     api_key = os.environ.get("THINGSPEAK_WRITE_KEY", "")
@@ -210,17 +252,33 @@ def main() -> None:
         print("[!] THINGSPEAK_WRITE_KEY not set - dweet.cc only. "
               "Set it with: export THINGSPEAK_WRITE_KEY=your_key")
 
+    mqtt_client = None
+    if args.publish_commands:
+        import paho.mqtt.client as mqtt
+        try:
+            mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        except AttributeError:
+            mqtt_client = mqtt.Client()
+        mqtt_client.connect(args.broker, 1883, 60)
+        mqtt_client.loop_start()
+        print(f"[*] Actuator commands will be published to {args.broker}")
+
     interval = max(args.interval, THINGSPEAK_MIN_INTERVAL) if api_key else args.interval
     sent = 0
     try:
         while args.count == 0 or sent < args.count:
             print(f"\n--- forward #{sent + 1} ---")
-            forward_once(args.thing_name, args.landing_dir, api_key)
+            forward_once(args.thing_name, args.landing_dir, api_key,
+                         actuate=args.actuate, mqtt_client=mqtt_client)
             sent += 1
             if args.count == 0 or sent < args.count:
                 time.sleep(interval)
     except KeyboardInterrupt:
         print("\n[!] Stopped by user.")
+    finally:
+        if mqtt_client is not None:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
 
 
 if __name__ == "__main__":
