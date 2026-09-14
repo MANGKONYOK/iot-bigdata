@@ -19,7 +19,7 @@ from pyspark.sql.types import (
 )
 from pyspark.sql.functions import (
     col,
-    to_timestamp,
+    try_to_timestamp,
     window,
     avg,
     max as spark_max,
@@ -125,12 +125,16 @@ def compute_windowed_aggregations(
     Computes 10-second tumbling/sliding windowed averages and metrics with watermarking
     and anomaly detection status classification.
     """
-    # 1. Parse event_time string to TimestampType
+    # 1. Parse event_time string to TimestampType.
+    # try_to_timestamp (not to_timestamp) is required: Spark 4 enables ANSI mode by
+    # default, where to_timestamp RAISES on malformed input instead of returning NULL.
+    # That made the coalesce fallback below unreachable and let a single malformed
+    # event_time abort the whole streaming query.
     parsed_df = stream_df.withColumn(
         "timestamp",
         coalesce(
-            to_timestamp(col("event_time"), "yyyy-MM-dd HH:mm:ss"),
-            to_timestamp(col("_received_at"), "yyyy-MM-dd HH:mm:ss"),
+            try_to_timestamp(col("event_time"), lit("yyyy-MM-dd HH:mm:ss")),
+            try_to_timestamp(col("_received_at"), lit("yyyy-MM-dd HH:mm:ss")),
         ),
     )
 
