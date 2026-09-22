@@ -207,27 +207,3 @@ Defect 4 is the subtle one. Spark 4 enables `spark.sql.ansi.enabled` by default,
 `to_timestamp` raises instead of returning `NULL`. That killed the stream on a single bad
 message and left the `coalesce` fallback to `_received_at` permanently unreachable.
 `try_to_timestamp` restores the intended behaviour.
-
-## 11. Layout
-
-```text
-Lab5
-├── README.md                     this file
-├── requirements.txt              dependency manifest
-├── data/
-│   └── CPE371_datalog.csv        1088 rows of sensor telemetry
-├── iot_landing/                  runtime landing zone, one JSON file per event
-├── notebooks/
-│   ├── play_dweet.ipynb          dweet.cc HTTP example
-│   ├── play_mqtt_publisher.ipynb MQTT publish example
-│   └── play_mqtt_subscriber.ipynb MQTT subscribe example
-├── src/
-│   ├── mqtt_publisher.py         stage 1, CSV to MQTT
-│   ├── mqtt_bridge.py            stage 2, MQTT to landing zone
-│   ├── spark_streaming.py        stage 3, windowed aggregation and alerts
-│   ├── cloud_forwarder.py        stage 4, dweet.cc and ThingSpeak
-│   └── actuator_logic.py         stage 4, control rules
-└── docs/
-    ├── architecture.png          system architecture diagram
-    └── Lab_Report.md             lab report
-```
