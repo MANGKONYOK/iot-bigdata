@@ -1,4 +1,4 @@
-# CPE371 Big Data Engineering — IoT & Spark Stream Processing Lab
+# CPE371 Big Data Engineering - IoT & Spark Stream Processing Lab
 
 MQTT telemetry from a sensor datalog, landed as JSON, aggregated by PySpark Structured
 Streaming into 10-second windows, forwarded to the cloud and fed back to smart-home actuators.
@@ -25,8 +25,8 @@ Streaming into 10-second windows, forwarded to the cloud and fed back to smart-h
 
 | member | ID | area |
 | ------ | -- | ---- |
-| Sorawit Chaithong | 67070503442 | Spark Structured Streaming & analytics |
-| Kittiphat Noikate | 67070503459 | Data ingestion & MQTT pipeline |
+| Sorawit Chaithong | 67070503442 | Spark Structured Streaming and analytics |
+| Kittiphat Noikate | 67070503459 | Data ingestion and MQTT pipeline |
 | Piti Srisongkram | 67070503467 | Cloud integration & actuators |
 
 ## 2. Pipeline
