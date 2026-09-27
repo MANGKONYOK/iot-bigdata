@@ -51,6 +51,8 @@ checkpoints/
 metastore_db/
 derby.log
 *.log
+# Lab 7.1 input dataset (a Spark executor log, not a runtime log)
+!data/lab7/spark.log
 
 # Unit test / coverage reports
 htmlcov/
