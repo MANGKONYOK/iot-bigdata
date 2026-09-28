@@ -19,6 +19,7 @@ Streaming into 10-second windows, forwarded to the cloud and fed back to smart-h
 | 10 | [Fixes applied](#10-fixes-applied) | seven defects found by running the code | done |
 | 11 | [Layout](#11-layout) | directory tree | done |
 | 12 | [Lab 7.1 - Spark log analytics](#12-lab-71---spark-log-analytics) | Lab 1 Q1–Q3 on `spark.log` with RDDs | done |
+| 13 | [Lab 7.2 - House price analytics](#13-lab-72---house-price-analytics) | Lab 2 Q1–Q2 on the house datasets with DataFrames | done |
 
 ---
 
@@ -116,7 +117,7 @@ Notes:
 Tests need no broker or running pipeline, only Java:
 
 ```bash
-python -m pytest -q tests        # 15 tests; Spark start-up dominates the run time
+python -m pytest -q tests        # 24 tests; Spark start-up dominates the run time
 ```
 
 ## 6. Modules
@@ -129,6 +130,7 @@ python -m pytest -q tests        # 15 tests; Spark start-up dominates the run ti
 | `cloud_forwarder.py` | 285 | derives the four metrics, posts to dweet.cc and ThingSpeak, runs actuators | `--thing-name --count --interval --actuate --publish-commands` |
 | `actuator_logic.py` | 158 | evaluates the four control rules and emits LED commands | library, `python src/actuator_logic.py` for a demo |
 | `log_analytics.py` | 356 | Lab 7.1: RDD analytics on `spark.log`, answers Lab 1 Q1–Q3 | `--log-path --iqr-factor` |
+| `house_analytics.py` | 196 | Lab 7.2: DataFrame analytics on the house datasets, answers Lab 2 Q1–Q2 | `--data-dir --top --sale-condition` |
 
 The bridge writes `.{event_id}.tmp` then renames to `{event_id}.json`. The leading dot keeps
 Spark's file source from reading a half-written file.
@@ -224,15 +226,19 @@ message and left the `coalesce` fallback to `_received_at` permanently unreachab
 data/
   CPE371_datalog.csv          sensor datalog replayed by the publisher
   lab7/spark.log              Lab 7.1 input, a Spark executor log (2000 lines)
+  lab7/Branch{1,2}_{Gov,House}Dataset.csv
+                              Lab 7.2 input, 1460 houses split across two branches
 iot_landing/                  bridge output, one JSON file per event (git-ignored)
 notebooks/
   assignment1.ipynb           dweet.cc + ThingSpeak
   assignment2.ipynb           CPE_HOUSE MQTT topics, Spark activity, actuators
   lab7_1_log_analytics.ipynb  Lab 7.1 submission notebook, executed with outputs
+  lab7_2_house_prices.ipynb   Lab 7.2 submission notebook, executed with outputs
 src/                          the modules in section 6
 tests/
   test_log_analytics.py       Lab 7.1 answers, synthetic and real log (10 tests)
   test_spark_streaming.py     regression tests for the Doc 7.1 streaming findings (5 tests)
+  test_house_analytics.py     Lab 7.2 tables, synthetic and real data (9 tests)
 ```
 
 ## 12. Lab 7.1 - Spark log analytics
@@ -269,3 +275,35 @@ The streaming work reviewed in Lab 7.1 (Issues #4 and #5) had three issues on th
 above. `tests/test_spark_streaming.py` now covers them: zone-level windows, strict ALERT
 boundaries, a malformed `event_time`, a malformed file that no longer stops the stream, and a
 late event dropped by the watermark.
+
+## 13. Lab 7.2 - House price analytics
+
+Lab 2 of the Lab 7 brief: two questions on the house datasets, answered with DataFrames. Each
+branch splits a house across a Gov file and a House file that share `Id`. They are joined per
+branch, then stacked with `unionByName`, giving 1460 houses. The notebook
+`notebooks/lab7_2_house_prices.ipynb` holds the tutorial, the step-by-step code and the explanations.
+`src/house_analytics.py` packages the same logic, and the last notebook cell asserts that both agree.
+
+```bash
+python src/house_analytics.py                        # prints both tables
+python src/house_analytics.py --sale-condition all   # Q2 without the Normal-sale filter
+```
+
+| # | question | method | answer |
+| - | -------- | ------ | ------ |
+| 1 | pricing summary per `MSZoning` | `groupBy` + one `agg`, sorted by `avg_price` | FV highest average (214014.06, 65 houses); RL largest zone (1151); C (all) lowest (74528.00) |
+| 2 | top 5 price per square foot | `TotalArea` = basement + both floors, `SalePrice / TotalArea`, Normal sales only | Id 533 first at 129.99, then 393, 534, 186, 873 |
+
+Both tables reproduce the expected output in the brief exactly. They depend on these rules:
+
+| # | rule | why |
+| - | ---- | --- |
+| 1 | keep every house, no `dropna()` | the expected `n` adds up to 1460; `avg` already skips the 259 missing `LotFrontage` |
+| 2 | cast numbers before aggregating | on strings `max` compares text, so `'99900'` beats `'755000'` |
+| 3 | `decimal(10,2)` instead of `round()` | `round()` prints `74528.0`; the table shows `74528.00` |
+| 4 | Q2 counts `SaleCondition == "Normal"` only | Partial sales 689, 899 and 804 (new builds sold unfinished) otherwise lead the ranking |
+
+Two cells of the original Lab 2 tutorial fail under Spark 4's ANSI mode, which the lab VM's older
+Spark does not enable. Casting `'65.0'` straight to `integer` raises `CAST_INVALID_INPUT`, and `+`
+on string columns raises `DATATYPE_MISMATCH`. The notebook casts through `double` and casts the area
+columns before adding them. Each change is marked in the cell.
